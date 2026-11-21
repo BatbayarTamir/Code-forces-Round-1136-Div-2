@@ -1,0 +1,154 @@
+#include <algorithm>
+#include <cstdint>
+#include <iostream>
+#include <vector>
+
+int main() {
+    std::ios::sync_with_stdio(false);
+    std::cin.tie(nullptr);
+
+    int t;
+    if (!(std::cin >> t)) {
+        return 0;
+    }
+
+    std::vector<int> qn(t), qm(t);
+    int max_m = 0;
+    int max_n = 0;
+    for (int i = 0; i < t; ++i) {
+        std::cin >> qn[i] >> qm[i];
+        if (qn[i] <= qm[i]) {
+            max_m = std::max(max_m, qm[i]);
+            max_n = std::max(max_n, qn[i]);
+        }
+    }
+
+    if (max_m == 0) {
+        for (int i = 0; i < t; ++i) {
+            std::cout << 0 << '\n';
+        }
+        return 0;
+    }
+
+    int max_d = std::max(1, max_m / 2);
+
+    // Sieve square-free numbers up to max_d
+    std::vector<uint8_t> sqfree(max_d + 1, 1);
+    std::vector<uint8_t> comp(max_d + 1, 0);
+    for (int p = 2; p <= max_d; ++p) {
+        if (!comp[p]) {
+            for (int mult = p * 2; mult <= max_d; mult += p) {
+                comp[mult] = 1;
+            }
+            long long sq = 1LL * p * p;
+            if (sq <= max_d) {
+                for (long long mult = sq; mult <= max_d; mult += sq) {
+                    sqfree[static_cast<int>(mult)] = 0;
+                }
+            }
+        }
+    }
+
+    std::vector<int> sq_id(max_d + 1, -1);
+    int num_sq = 0;
+    for (int d = 1; d <= max_d; ++d) {
+        if (sqfree[d]) {
+            sq_id[d] = num_sq++;
+        }
+    }
+
+    // Build CSR of square-free divisors d <= max_d for each u in [1, max_m]
+    std::vector<int> deg(max_m + 1, 0);
+    for (int d = 1; d <= max_d; ++d) {
+        if (!sqfree[d]) continue;
+        for (int u = d; u <= max_m; u += d) {
+            deg[u]++;
+        }
+    }
+
+    std::vector<int> head(max_m + 2, 0);
+    for (int u = 1; u <= max_m; ++u) {
+        head[u + 1] = head[u] + deg[u];
+    }
+    std::vector<int> flat_divs(head[max_m + 1]);
+    std::vector<int> cur = head;
+    for (int d = 1; d <= max_d; ++d) {
+        if (!sqfree[d]) continue;
+        int id = sq_id[d];
+        for (int u = d; u <= max_m; u += d) {
+            flat_divs[cur[u]++] = id;
+        }
+    }
+
+    // Group queries by m
+    std::vector<int> q_deg(max_m + 1, 0);
+    for (int i = 0; i < t; ++i) {
+        if (qn[i] <= qm[i]) {
+            q_deg[qm[i]]++;
+        }
+    }
+    std::vector<int> q_head(max_m + 2, 0);
+    for (int m = 1; m <= max_m; ++m) {
+        q_head[m + 1] = q_head[m] + q_deg[m];
+    }
+    std::vector<int> q_n_flat(q_head[max_m + 1]);
+    std::vector<int> q_id_flat(q_head[max_m + 1]);
+    std::vector<int> q_cur = q_head;
+    for (int i = 0; i < t; ++i) {
+        if (qn[i] <= qm[i]) {
+            int pos = q_cur[qm[i]]++;
+            q_n_flat[pos] = qn[i];
+            q_id_flat[pos] = i;
+        }
+    }
+
+    const int total_words = (max_n >> 6) + 1;
+    std::vector<uint64_t> G(static_cast<size_t>(num_sq) * total_words, 0ULL);
+    std::vector<uint64_t> acc(total_words, 0ULL);
+    std::vector<uint64_t> F(total_words, 0ULL);
+    std::vector<int> ans(t, 0);
+
+    for (int u = 1; u <= max_m; ++u) {
+        int words = (std::min(u, max_n) >> 6) + 1;
+
+        std::fill(acc.begin(), acc.begin() + words, 0ULL);
+        int r_begin = head[u];
+        int r_end = (u <= max_d && sqfree[u]) ? head[u + 1] - 1 : head[u + 1];
+        for (int idx = r_begin; idx < r_end; ++idx) {
+            const uint64_t* gd = &G[static_cast<size_t>(flat_divs[idx]) * total_words];
+            for (int w = 0; w < words; ++w) {
+                acc[w] ^= gd[w];
+            }
+        }
+
+        // F_u[n] = acc[n - 1] for n >= 2, and F_u[1] = 1
+        uint64_t carry = 0;
+        for (int w = 0; w < words; ++w) {
+            uint64_t next_carry = acc[w] >> 63;
+            F[w] = (acc[w] << 1) | carry;
+            carry = next_carry;
+        }
+        F[0] |= 2ULL;
+
+        int w_end = head[u + 1];
+        for (int idx = r_begin; idx < w_end; ++idx) {
+            uint64_t* gd = &G[static_cast<size_t>(flat_divs[idx]) * total_words];
+            for (int w = 0; w < words; ++w) {
+                gd[w] ^= F[w];
+            }
+        }
+
+        // G[0] (d = 1) holds the prefix XOR of F_1..F_u
+        const uint64_t* g1 = G.data();
+        for (int pos = q_head[u]; pos < q_head[u + 1]; ++pos) {
+            int n_val = q_n_flat[pos];
+            ans[q_id_flat[pos]] = static_cast<int>((g1[n_val >> 6] >> (n_val & 63)) & 1ULL);
+        }
+    }
+
+    for (int i = 0; i < t; ++i) {
+        std::cout << ans[i] << '\n';
+    }
+
+    return 0;
+}
